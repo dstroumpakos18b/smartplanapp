@@ -1,0 +1,13 @@
+.expo/
+.expo-shared/
+
+node_modules/
+.expo/
+.expo-shared/
+android/
+ios/
+dist/
+build/
+npm-debug.log*
+.env
+
