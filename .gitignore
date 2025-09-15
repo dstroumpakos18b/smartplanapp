@@ -1,6 +1,4 @@
-.expo/
-.expo-shared/
-
+# Expo / RN
 node_modules/
 .expo/
 .expo-shared/
@@ -9,5 +7,7 @@ ios/
 dist/
 build/
 npm-debug.log*
-.env
+*.log
 
+# Env
+.env
