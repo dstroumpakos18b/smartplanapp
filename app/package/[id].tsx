@@ -1,57 +1,134 @@
-import React from "react";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import {
-  SafeAreaView,
-  ScrollView,
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Image,
-} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { buildPrice } from "../../lib/pricing"; // <-- pricing engine
+import { useLocalSearchParams, useRouter } from "expo-router";
+import React, { useMemo, useState } from "react";
+import {
+    Alert,
+    Button,
+    Image,
+    Modal,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
+} from "react-native";
+import { API_BASE_URL as BASE_URL } from "../../lib/config"; // adjust relative path
+import { buildPrice } from "../../lib/pricing";
 
 export default function PackageDetails() {
   const router = useRouter();
-  const params = useLocalSearchParams(); // id, pkg
-
-  // Parse pkg param
+  const params = useLocalSearchParams();
   const raw = Array.isArray(params.pkg) ? params.pkg[0] : params.pkg;
-  let initialPkg: any = null;
-  try {
-    if (raw) initialPkg = JSON.parse(raw);
-  } catch {
-    initialPkg = null;
-  }
 
-  if (!initialPkg) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={{ padding: 20 }}>
-          <Text style={styles.error}>Package not found.</Text>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-            <Text style={styles.backBtnText}>← Back</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const initialPkg: any = useMemo(() => {
+    try {
+      if (raw) return JSON.parse(String(raw));
+    } catch {
+      // fallthrough
+    }
+    return null;
+  }, [raw]);
 
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
 
-  // ---- Live pricing state (selected hotel) ----
-  const [selectedHotelIndex, setSelectedHotelIndex] = React.useState(0);
-  const flight = initialPkg.flight; // single recommended flight
-  const hotels: any[] = Array.isArray(initialPkg.hotels) ? initialPkg.hotels : [];
-  const nights: number = initialPkg.nights ?? 1;
+  // pricing / package data (derived from parsed initialPkg)
+  const flight = initialPkg?.flight ?? null;
+  const hotels: any[] = useMemo(() => (Array.isArray(initialPkg?.hotels) ? initialPkg!.hotels! : []), [initialPkg]);
+  const nights: number = initialPkg?.nights ?? 1;
 
-  // compute price for current hotel
-  const currentHotel = hotels[selectedHotelIndex] ?? { pricePerNight: 0, nights };
-  const livePricing = React.useMemo(
+  // Hooks (always declared in same order)
+  const [selectedHotelIndex, setSelectedHotelIndex] = useState(0);
+  const currentHotel = useMemo(() => hotels[selectedHotelIndex] ?? { pricePerNight: 0, nights }, [hotels, selectedHotelIndex, nights]);
+
+  const livePricing = useMemo(
     () => buildPrice(flight, { ...currentHotel, nights }, { marginPct: 0.08, fees: 15 }),
     [flight, currentHotel, nights]
   );
+
+  // ---- Add Activity Modal ----
+  const [showModal, setShowModal] = useState(false);
+  const [title, setTitle] = useState("");
+  const [dateISO, setDateISO] = useState("");
+  const [location, setLocation] = useState("");
+  const [durationM, setDurationM] = useState("");
+
+  async function saveActivity() {
+    try {
+      const res = await fetch(`${BASE_URL}/api/trips/${id}/activities`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          date: dateISO,
+          location,
+          durationM: durationM ? Number(durationM) : undefined,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || res.statusText);
+      }
+      setShowModal(false);
+      setTitle("");
+      setDateISO("");
+      setLocation("");
+      setDurationM("");
+      Alert.alert("Success", "Activity added!");
+    } catch (e: any) {
+      Alert.alert("Error", e.message || "Failed to add activity");
+    }
+  }
+
+  // ---- Save Trip ----
+  const [saving, setSaving] = useState(false);
+
+  async function saveCurrentAsTrip() {
+    try {
+      setSaving(true);
+
+      // Optional health check for clearer errors during dev
+      const health = await fetch(`${BASE_URL}/health`).catch(() => null);
+      if (!health || (health.status && !health.ok)) {
+        throw new Error(`API not reachable at ${BASE_URL}`);
+      }
+
+      const title = initialPkg?.title ?? "Saved Trip";
+      const destination = initialPkg?.destination ?? "Destination";
+      const startDate = initialPkg?.dates?.start ?? null;
+      const endDate = initialPkg?.dates?.end ?? null;
+      const pricePerPerson = livePricing?.totalPerPerson ?? null;
+
+      const payload = { flight, hotel: currentHotel, nights, pkg: initialPkg };
+
+      const res = await fetch(`${BASE_URL}/api/trips`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          destination,
+          startDate,
+          endDate,
+          currency: "EUR",
+          pricePerPerson,
+          payload,
+        }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || res.statusText || "Failed to save");
+
+      Alert.alert("Saved", "Trip saved to My Trips", [
+        { text: "Open My Trips", onPress: () => router.push("/trips") },
+        { text: "OK" },
+      ]);
+    } catch (e: any) {
+      Alert.alert("Error", e.message || "Failed to save trip");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -70,7 +147,7 @@ export default function PackageDetails() {
           style={styles.hero}
         />
 
-        {/* Info (shows LIVE price) */}
+        {/* Info Card */}
         <View style={styles.infoCard}>
           <View style={styles.rowBetween}>
             <Text style={styles.price}>€{livePricing.totalPerPerson}</Text>
@@ -93,13 +170,15 @@ export default function PackageDetails() {
             <Text style={styles.sectionTitle}>Highlights</Text>
             <View style={styles.tagsWrap}>
               {initialPkg.highlights.map((h: string) => (
-                <Text key={h} style={styles.tag}>{h}</Text>
+                <Text key={h} style={styles.tag}>
+                  {h}
+                </Text>
               ))}
             </View>
           </>
         )}
 
-        {/* Price breakdown (LIVE) */}
+        {/* Price breakdown */}
         <Text style={styles.sectionTitle}>Price breakdown</Text>
         <View style={styles.block}>
           {"flights" in livePricing.breakdown && (
@@ -132,52 +211,36 @@ export default function PackageDetails() {
                 {flight.stops === 0 ? "Direct" : `${flight.stops} stop`} ·{" "}
                 {Math.round(flight.durationMinutes / 60)}h
               </Text>
-              {!!flight.fareBrand && <Text style={styles.muted}>Fare: {flight.fareBrand}</Text>}
-              <View style={{ flexDirection: "row", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-                <Badge text={flight.baggage.carryOn ? "Carry-on ✓" : "No carry-on"} />
-                <Badge
-                  text={
-                    flight.baggage.checkedKg ? `Checked bag ${flight.baggage.checkedKg}kg` : "No checked bag"
-                  }
-                />
-                {Array.isArray(flight.extras) &&
-                  flight.extras.map((e: string) => <Badge key={e} text={e} />)}
-              </View>
             </View>
           </>
         )}
 
-        {/* Hotel selector (tap to re-price) */}
+        {/* Hotel selector */}
         {hotels.length > 0 && (
           <>
-            <Text style={styles.sectionTitle}>Choose hotel (live re-price)</Text>
+            <Text style={styles.sectionTitle}>Choose hotel</Text>
             {hotels.map((h, idx) => {
               const active = idx === selectedHotelIndex;
               return (
                 <TouchableOpacity
-                  key={h.id ?? h.name ?? idx}
+                  key={h.id ?? idx}
                   onPress={() => setSelectedHotelIndex(idx)}
                   activeOpacity={0.8}
                   style={[styles.block, active && styles.blockActive]}
                 >
-                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                    <Text style={styles.rowLabel}>
-                      {h.name ?? "Hotel"} {h.stars ? `• ${"★".repeat(h.stars)}` : ""}
-                    </Text>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <Text style={styles.rowLabel}>{h.name ?? "Hotel"}</Text>
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                       <Text style={styles.rowValue}>€{h.pricePerNight}/night</Text>
                       {active && <Ionicons name="checkmark-circle" size={20} color="#16a34a" />}
                     </View>
                   </View>
-                  <Text style={styles.muted}>
-                    {h.area ? `${h.area} · ` : ""}
-                    {h.board ?? "RO"} · {h.refundable ? "Refundable" : "Non-ref"}
-                  </Text>
-                  {Array.isArray(h.amenities) && (
-                    <View style={{ flexDirection: "row", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-                      {h.amenities.map((a: string) => <Badge key={a} text={a} />)}
-                    </View>
-                  )}
                 </TouchableOpacity>
               );
             })}
@@ -185,17 +248,69 @@ export default function PackageDetails() {
         )}
 
         {/* CTAs */}
-        <View style={styles.ctaRow}>
+        <View style={[styles.ctaRow, { marginTop: 4 }]}>
           <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={() => router.back()}>
             <Text style={[styles.btnText, styles.btnGhostText]}>Back</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.btn, styles.btnPrimary]}>
-            <Text style={[styles.btnText, styles.btnPrimaryText]}>Request Booking</Text>
+
+          <TouchableOpacity
+            style={[styles.btn, styles.btnPrimary, saving && { opacity: 0.6 }]}
+            onPress={saveCurrentAsTrip}
+            disabled={saving}
+          >
+            <Text style={[styles.btnText, styles.btnPrimaryText]}>
+              {saving ? "Saving…" : "Save Trip"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={[styles.ctaRow, { marginTop: 10 }]}>
+          <TouchableOpacity
+            style={[styles.btn, styles.btnPrimary]}
+            onPress={() => setShowModal(true)}
+          >
+            <Text style={[styles.btnText, styles.btnPrimaryText]}>Add Activity</Text>
           </TouchableOpacity>
         </View>
 
         <View style={{ height: 60 }} />
       </ScrollView>
+
+      {/* Add Activity Modal */}
+      <Modal visible={showModal} animationType="slide" onRequestClose={() => setShowModal(false)}>
+        <View style={{ padding: 20, flex: 1, justifyContent: "center", gap: 12 }}>
+          <Text style={{ fontWeight: "800", fontSize: 18, marginBottom: 8 }}>Add Activity</Text>
+          <TextInput
+            placeholder="Title"
+            value={title}
+            onChangeText={setTitle}
+            style={styles.input}
+          />
+          <TextInput
+            placeholder="Date (ISO: 2025-03-27T10:00:00)"
+            value={dateISO}
+            onChangeText={setDateISO}
+            style={styles.input}
+          />
+          <TextInput
+            placeholder="Location (optional)"
+            value={location}
+            onChangeText={setLocation}
+            style={styles.input}
+          />
+          <TextInput
+            placeholder="Duration minutes (optional)"
+            value={durationM}
+            onChangeText={setDurationM}
+            keyboardType="numeric"
+            style={styles.input}
+          />
+          <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+            <Button title="Cancel" onPress={() => setShowModal(false)} />
+            <Button title="Save" onPress={saveActivity} />
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -205,23 +320,6 @@ function Row({ label, value }: { label: string; value: number }) {
     <View style={styles.rowBetween}>
       <Text style={styles.rowLabel}>{label}</Text>
       <Text style={styles.rowValue}>€{value}</Text>
-    </View>
-  );
-}
-
-function Badge({ text }: { text: string }) {
-  return (
-    <View
-      style={{
-        backgroundColor: "#eef2ff",
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 999,
-        marginRight: 6,
-        marginBottom: 6,
-      }}
-    >
-      <Text style={{ color: "#3730a3", fontWeight: "800", fontSize: 12 }}>{text}</Text>
     </View>
   );
 }
@@ -283,6 +381,7 @@ const styles = StyleSheet.create({
   btnGhostText: { color: "#0f172a" },
   btnPrimary: { backgroundColor: "#0f172a", borderColor: "#0f172a" },
   btnPrimaryText: { color: "white" },
+  input: { backgroundColor: "#f3f4f6", padding: 12, borderRadius: 10 },
   error: { textAlign: "center", color: "#ef4444" },
   backBtn: { alignSelf: "center", marginTop: 20 },
   backBtnText: { color: "#2563eb", fontWeight: "800" },

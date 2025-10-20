@@ -2,12 +2,14 @@ import { FlightOption, HotelQuote } from "./pricing";
 
 export const dummyFlight: FlightOption = {
   provider: "airline",
+  airline: "Aegean",
   price: 400, // EUR
   currency: "EUR",
   segments: [{ from: "ATH", to: "NRT", depart: "2025-09-20T08:00Z", arrive: "2025-09-20T20:00Z", carrier: "Aegean" }],
   stops: 1,
   durationMinutes: 780,  // 13h
   layoversMinutes: [120],
+  baggage: { carryOn: true, checkedKg: 20 },
 };
 
 export const dummyHotel: HotelQuote = {

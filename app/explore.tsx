@@ -1,330 +1,334 @@
-import React from "react";
+// app/explore.tsx
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  SafeAreaView,
   View,
   Text,
+  StyleSheet,
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
-  StyleSheet,
-  ScrollView,
+  FlatList,
   Keyboard,
-  Platform,
 } from "react-native";
-import DateTimePicker from "@react-native-community/datetimepicker";
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { generatePackages } from "../lib/generator";
-import { searchLocations } from "../lib/api";
 
-export default function ExploreScreen() {
+import { API_BASE_URL as BASE_URL } from "../lib/config";
+import { getFlights, getHotels, FlightQuote, HotelQuote } from "../lib/api";
+
+type Loc = { code: string; city: string; country: string };
+
+type PackageItem = {
+  id: string;
+  title: string;
+  flight: FlightQuote;
+  hotels: HotelQuote[];
+  totalPrice: number;
+  meta: { departDate: string; returnDate?: string; adults: number };
+};
+
+function buildPackages(
+  flight: FlightQuote,
+  hotels: HotelQuote[],
+  departDate: string,
+  returnDate: string | undefined,
+  adults: number
+): PackageItem[] {
+  return hotels.map((h) => ({
+    id: `${flight.origin}_${flight.destination}_${h.id}`,
+    title: `${h.name} + Flight ${flight.origin} → ${flight.destination}`,
+    flight,
+    hotels: [h],
+    totalPrice: Math.round(h.pricePerNight + flight.price),
+    meta: { departDate, returnDate, adults },
+  }));
+}
+
+export default function Explore() {
   const router = useRouter();
 
-  const [origin, setOrigin] = React.useState("ATH");
-  const [destination, setDestination] = React.useState("MAD");
-  const [departDate, setDepartDate] = React.useState("2025-11-01");
-  const [returnDate, setReturnDate] = React.useState("2025-11-10");
-  const [adults, setAdults] = React.useState("2");
+  // Form state
+  const [origin, setOrigin] = useState("ATH");
+  const [destination, setDestination] = useState("MAD");
+  const [departDate, setDepartDate] = useState("2025-03-23");
+  const [returnDate, setReturnDate] = useState("2025-03-30");
+  const [adults, setAdults] = useState(2);
 
-  const [showDepartPicker, setShowDepartPicker] = React.useState(false);
-  const [showReturnPicker, setShowReturnPicker] = React.useState(false);
+  // Type-ahead state (debounced; no setState during render)
+  const [focusField, setFocusField] = useState<"from" | "to" | null>(null);
+  const [queryFrom, setQueryFrom] = useState(origin);
+  const [queryTo, setQueryTo] = useState(destination);
+  const [suggestions, setSuggestions] = useState<Loc[]>([]);
+  const [fetchingSuggestions, setFetchingSuggestions] = useState(false);
+  const debounceRef = useRef<number | null>(null);
 
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const [results, setResults] = React.useState<any[]>([]);
+  // Results
+  const [packages, setPackages] = useState<PackageItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function onPickDate(kind: "depart" | "return", date: Date) {
-    const iso = date.toISOString().slice(0, 10);
-    if (kind === "depart") setDepartDate(iso);
-    else setReturnDate(iso);
-  }
+  // ---- Debounced suggestions (runs in an effect, not render!) ----
+  useEffect(() => {
+    const term = focusField === "from" ? queryFrom : focusField === "to" ? queryTo : "";
+    if (!focusField || term.trim().length < 2) {
+      setSuggestions([]);
+      return;
+    }
 
-  async function onSearch() {
-    setError(null);
-    setResults([]);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(async () => {
+      try {
+        setFetchingSuggestions(true);
+        const r = await fetch(`${BASE_URL}/api/locations?q=${encodeURIComponent(term)}`, {
+          cache: "no-store",
+        });
+        const data = (await r.json()) as Loc[];
+        setSuggestions(Array.isArray(data) ? data : []);
+      } catch {
+        setSuggestions([]);
+      } finally {
+        setFetchingSuggestions(false);
+      }
+    }, 300);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [focusField, queryFrom, queryTo]);
+
+  // ---- Search ----
+  const onSearch = useCallback(async () => {
     Keyboard.dismiss();
-
-    const o = origin.trim().toUpperCase();
-    const d = destination.trim().toUpperCase();
-    if (o.length !== 3 || d.length !== 3) {
-      setError("Pick airports from the list (IATA codes, e.g., ATH → MAD).");
-      return;
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(departDate) || !/^\d{4}-\d{2}-\d{2}$/.test(returnDate)) {
-      setError("Dates must be YYYY-MM-DD.");
-      return;
-    }
-
     setLoading(true);
+    setError(null);
+    setPackages([]);
+
     try {
-      const pkgs = await generatePackages({
-        origin: o,
-        destination: d,
-        departDate,
-        returnDate,
-        adults: Number(adults) || 1,
-      });
-      setResults(pkgs);
-      if (pkgs.length === 0) setError("No suggestions. Try different dates or another destination.");
+      const [flight, hotels] = await Promise.all([
+        getFlights({ origin, destination, departDate, returnDate, adults }),
+        getHotels({ destination, checkIn: departDate, checkOut: returnDate, adults }),
+      ]);
+
+      setPackages(buildPackages(flight, hotels, departDate, returnDate, adults));
     } catch (e: any) {
-      console.log("Search error:", e);
       setError(e?.message || "Search failed");
+      setPackages([]);
     } finally {
       setLoading(false);
     }
-  }
+  }, [origin, destination, departDate, returnDate, adults]);
+
+  // ---- UI helpers ----
+  const showSuggestions = useMemo(
+    () => !!focusField && (fetchingSuggestions || suggestions.length > 0),
+    [focusField, fetchingSuggestions, suggestions.length]
+  );
+
+  const incAdults = () => setAdults((n) => Math.max(1, n + 1));
+  const decAdults = () => setAdults((n) => Math.max(1, n - 1));
+
+  const renderItem = ({ item }: { item: PackageItem }) => {
+    const { departDate: d, returnDate: r, adults: a } = item.meta;
+    return (
+      <TouchableOpacity
+        style={s.card}
+        onPress={() =>
+          router.push({ pathname: "/package/[id]", params: { id: item.id, pkg: JSON.stringify(item) } })
+        }
+      >
+        <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+          <Text style={s.title}>{item.title}</Text>
+          <Text style={s.price}>€{item.totalPrice}</Text>
+        </View>
+        <Text style={s.muted}>
+          {item.flight.origin} → {item.flight.destination}
+        </Text>
+        <Text style={s.mutedSmall}>
+          {d} — {r || "—"} • {a} {a > 1 ? "adults" : "adult"}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }}>
-      <Text style={styles.h1}>Build your Smart Plan</Text>
+    <SafeAreaView style={s.safe}>
+      <View style={s.form}>
+        <Text style={s.headline}>Build your Smart Plan</Text>
 
-      {/* Search form */}
-      <View style={[styles.card, { position: "relative", zIndex: 1 }]}>
-        <Row zIndex={30}>
-          <AutocompleteInput
-            label="From"
-            value={origin}
-            onPick={(code) => setOrigin(code.toUpperCase())}
-          />
-          <AutocompleteInput
-            label="To"
-            value={destination}
-            onPick={(code) => setDestination(code.toUpperCase())}
-          />
-        </Row>
+        {/* From */}
+        <Text style={s.label}>From</Text>
+        <TextInput
+          style={s.input}
+          value={queryFrom}
+          onChangeText={(t) => setQueryFrom(t.toUpperCase())}
+          onFocus={() => setFocusField("from")}
+          onBlur={() => {
+            setFocusField(null);
+            if (queryFrom) setOrigin(queryFrom); // commit on blur
+          }}
+          placeholder="Origin (e.g., ATH)"
+          autoCapitalize="characters"
+        />
 
-        <Row>
-          <DateField
-            label="Depart"
-            value={departDate}
-            open={() => setShowDepartPicker(true)}
-          />
-          <DateField
-            label="Return"
-            value={returnDate}
-            open={() => setShowReturnPicker(true)}
-          />
-        </Row>
+        {/* To */}
+        <Text style={s.label}>To</Text>
+        <TextInput
+          style={s.input}
+          value={queryTo}
+          onChangeText={(t) => setQueryTo(t.toUpperCase())}
+          onFocus={() => setFocusField("to")}
+          onBlur={() => {
+            setFocusField(null);
+            if (queryTo) setDestination(queryTo); // commit on blur
+          }}
+          placeholder="Destination (e.g., MAD)"
+          autoCapitalize="characters"
+        />
 
-        {/* Native pickers */}
-        {showDepartPicker && (
-          <DateTimePicker
-            value={new Date(departDate)}
-            mode="date"
-            display={Platform.OS === "ios" ? "inline" : "default"}
-            onChange={(_, d) => {
-              setShowDepartPicker(false);
-              if (d) onPickDate("depart", d);
-            }}
-          />
+        {/* Suggestions */}
+        {showSuggestions && (
+          <View style={s.suggestions}>
+            {fetchingSuggestions ? (
+              <Text style={s.mutedSmall}>Loading suggestions…</Text>
+            ) : (
+              suggestions.map((sug) => (
+                <TouchableOpacity
+                  key={`${sug.code}-${sug.city}`}
+                  onPress={() => {
+                    if (focusField === "from") {
+                      setQueryFrom(sug.code);
+                      setOrigin(sug.code);
+                    } else if (focusField === "to") {
+                      setQueryTo(sug.code);
+                      setDestination(sug.code);
+                    }
+                    setFocusField(null);
+                    setSuggestions([]);
+                  }}
+                  style={s.suggestionItem}
+                >
+                  <Text style={s.suggestionText}>
+                    {sug.city} ({sug.code}) — {sug.country}
+                  </Text>
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
         )}
-        {showReturnPicker && (
-          <DateTimePicker
-            value={new Date(returnDate)}
-            mode="date"
-            display={Platform.OS === "ios" ? "inline" : "default"}
-            onChange={(_, d) => {
-              setShowReturnPicker(false);
-              if (d) onPickDate("return", d);
-            }}
-          />
-        )}
 
-        <Row>
-          <Field label="Adults">
-            <Input
-              value={adults}
-              onChangeText={setAdults}
-              keyboardType="number-pad"
-              maxLength={2}
-            />
-          </Field>
-          <View style={{ flex: 1 }} />
-        </Row>
+        {/* Dates */}
+        <Text style={s.label}>Depart</Text>
+        <TextInput style={s.input} value={departDate} onChangeText={setDepartDate} placeholder="YYYY-MM-DD" />
+        <Text style={s.label}>Return</Text>
+        <TextInput style={s.input} value={returnDate} onChangeText={setReturnDate} placeholder="YYYY-MM-DD" />
 
-        <TouchableOpacity style={styles.searchBtn} onPress={onSearch} disabled={loading}>
-          {loading ? <ActivityIndicator /> : <Text style={styles.searchBtnText}>Search</Text>}
+        {/* Adults */}
+        <Text style={s.label}>Adults</Text>
+        <View style={s.row}>
+          <TouchableOpacity onPress={decAdults} style={[s.btnSm, s.btnGhost]}>
+            <Ionicons name="remove-outline" size={18} />
+          </TouchableOpacity>
+          <Text style={{ paddingHorizontal: 12, fontWeight: "700" }}>{adults}</Text>
+          <TouchableOpacity onPress={incAdults} style={[s.btnSm, s.btnGhost]}>
+            <Ionicons name="add-outline" size={18} />
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity onPress={onSearch} style={[s.btn, s.btnPrimary]}>
+          <Text style={[s.btnText, s.btnPrimaryText]}>Search</Text>
         </TouchableOpacity>
-
-        {error && <Text style={styles.error}>{error}</Text>}
       </View>
 
       {/* Results */}
-      {results.map((pkg) => (
-        <View key={pkg.id} style={styles.resultCard}>
-          <Text style={styles.resultTitle}>{pkg.title}</Text>
-          <Text style={styles.resultSub}>
-            {pkg.nights} nights · {pkg.destination}
-          </Text>
-
-          <View style={styles.rowBetween}>
-            <Text style={styles.resultPrice}>€{pkg.pricing?.totalPerPerson ?? "—"}</Text>
-            <TouchableOpacity
-              style={styles.viewBtn}
-              onPress={() =>
-                router.push({
-                  pathname: "/package/[id]",
-                  params: { id: pkg.id, pkg: JSON.stringify(pkg) },
-                })
-              }
-            >
-              <Text style={styles.viewBtnText}>View</Text>
-            </TouchableOpacity>
-          </View>
+      {loading ? (
+        <View style={s.center}>
+          <ActivityIndicator />
+          <Text style={{ marginTop: 8, color: "#666" }}>Searching…</Text>
         </View>
-      ))}
-
-      <View style={{ height: 60 }} />
-    </ScrollView>
-  );
-}
-
-/* ---------- Autocomplete Input ---------- */
-function AutocompleteInput({
-  label,
-  value,
-  onPick,
-}: {
-  label: string;
-  value: string;
-  onPick: (iata: string) => void;
-}) {
-  const [q, setQ] = React.useState("");
-  const [items, setItems] = React.useState<any[]>([]);
-  const [open, setOpen] = React.useState(false);
-  const timer = React.useRef<any>(null);
-
-  async function run(query: string) {
-    try {
-      const list = await searchLocations(query);
-      const airportsFirst = [...list].sort((a, b) =>
-        a.type === b.type ? 0 : a.type === "AIRPORT" ? -1 : 1
-      );
-      setItems(airportsFirst);
-      setOpen(true);
-    } catch (e) {
-      setOpen(false);
-      setItems([]);
-    }
-  }
-
-  return (
-    <View style={{ flex: 1 }}>
-      <Text style={styles.label}>{label}</Text>
-      <TextInput
-        value={q || value}
-        onChangeText={(t) => {
-          setQ(t);
-          if (timer.current) clearTimeout(timer.current);
-          if (t.trim().length >= 2) {
-            timer.current = setTimeout(() => run(t), 250);
-          } else {
-            setOpen(false);
-            setItems([]);
-          }
-        }}
-        autoCapitalize="none"
-        placeholder="Type country / city / airport"
-        placeholderTextColor="#94a3b8"
-        style={styles.input}
-      />
-
-      {open && items.length > 0 && (
-        <View style={styles.dropdown}>
-          <ScrollView style={{ maxHeight: 240 }}>
-            {items.map((it, idx) => {
-              const code = it.iataCode || "";
-              const subtitle =
-                (it.type === "AIRPORT" ? "Airport · " : "City · ") +
-                [it.cityName, it.countryName || it.countryCode].filter(Boolean).join(", ");
-              return (
-                <TouchableOpacity
-                  key={`${code}-${it.type}-${idx}`}
-                  style={styles.option}
-                  onPress={() => {
-                    setOpen(false);
-                    setItems([]);
-                    setQ(code);
-                    onPick(code);
-                  }}
-                >
-                  <Text style={styles.optionTitle}>
-                    {code ? `${code} — ${it.name}` : it.name}
-                  </Text>
-                  <Text style={styles.optionSub}>{subtitle}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+      ) : error ? (
+        <View style={s.center}>
+          <Text style={{ fontWeight: "800", fontSize: 18, marginBottom: 8 }}>Something went wrong</Text>
+          <Text style={{ color: "#6b7280", marginBottom: 12 }}>{error}</Text>
+          <TouchableOpacity onPress={onSearch} style={[s.btn, s.btnPrimary]}>
+            <Text style={[s.btnText, s.btnPrimaryText]}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
+      ) : packages.length > 0 ? (
+        <FlatList
+          contentContainerStyle={{ padding: 16, gap: 12 }}
+          data={packages}
+          keyExtractor={(t) => t.id}
+          renderItem={renderItem}
+        />
+      ) : (
+        <View style={s.center}>
+          <Text style={{ fontWeight: "800", fontSize: 16 }}>No results yet — try searching above.</Text>
         </View>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
-/* ---------- Small UI helpers ---------- */
-function Row({ children, zIndex = 10 }: { children: React.ReactNode; zIndex?: number }) {
-  return <View style={{ flexDirection: "row", gap: 12, zIndex }}>{children}</View>;
-}
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <View style={{ flex: 1 }}>
-      <Text style={styles.label}>{label}</Text>
-      {children}
-    </View>
-  );
-}
-function Input(props: any) {
-  return <TextInput {...props} style={[styles.input, props.style]} placeholderTextColor="#94a3b8" />;
-}
-function DateField({ label, value, open }: { label: string; value: string; open: () => void }) {
-  return (
-    <View style={{ flex: 1 }}>
-      <Text style={styles.label}>{label}</Text>
-      <TouchableOpacity onPress={open} activeOpacity={0.8}>
-        <View style={[styles.input, { justifyContent: "center" }]}>
-          <Text style={{ color: "#0f172a", fontWeight: "700" }}>{value}</Text>
-        </View>
-      </TouchableOpacity>
-    </View>
-  );
-}
+const s = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: "#f6f7fb" },
+  form: { padding: 16, borderBottomWidth: 1, borderColor: "#e5e7eb" },
+  headline: { fontSize: 18, fontWeight: "800", color: "#0f172a", marginBottom: 8 },
 
-/* ---------- styles ---------- */
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f6f7fb" },
-  h1: { fontSize: 22, fontWeight: "900", color: "#0f172a", marginBottom: 12 },
-
-  card: { backgroundColor: "white", borderRadius: 16, padding: 16, borderWidth: 1, borderColor: "#eef0f4", marginBottom: 16 },
-  label: { fontWeight: "800", color: "#0f172a", marginBottom: 6 },
-  input: { backgroundColor: "#f1f5f9", borderRadius: 12, paddingHorizontal: 12, paddingVertical: 12, color: "#0f172a" },
-
-  dropdown: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    top: 72,
-    backgroundColor: "white",
-    borderRadius: 12,
+  label: { fontWeight: "700", marginTop: 8, marginBottom: 6, color: "#0f172a" },
+  input: {
+    height: 42,
+    paddingHorizontal: 12,
     borderWidth: 1,
     borderColor: "#e5e7eb",
-    shadowColor: "#000",
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-    zIndex: 50,
+    borderRadius: 10,
+    backgroundColor: "#f3f4f6",
   },
-  option: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#f1f5f9" },
-  optionTitle: { fontWeight: "800", color: "#0f172a" },
-  optionSub: { color: "#64748b", fontSize: 12, marginTop: 2 },
 
-  searchBtn: { marginTop: 12, backgroundColor: "#0f172a", paddingVertical: 14, borderRadius: 14, alignItems: "center" },
-  searchBtnText: { color: "white", fontWeight: "800" },
-  error: { color: "#ef4444", marginTop: 10 },
+  suggestions: {
+    backgroundColor: "white",
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 10,
+    marginTop: 6,
+  },
+  suggestionItem: { paddingVertical: 8, paddingHorizontal: 12 },
+  suggestionText: { color: "#0f172a" },
 
-  resultCard: { backgroundColor: "white", borderRadius: 16, padding: 16, borderWidth: 1, borderColor: "#eef0f4", marginBottom: 12 },
-  resultTitle: { fontSize: 16, fontWeight: "900", color: "#0f172a" },
-  resultSub: { color: "#64748b", marginTop: 2 },
-  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 12 },
-  resultPrice: { fontSize: 18, fontWeight: "900", color: "#0f172a" },
-  viewBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#0f172a" },
-  viewBtnText: { color: "white", fontWeight: "800" },
+  row: { flexDirection: "row", alignItems: "center" },
+
+  btn: {
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+    marginTop: 12,
+  },
+  btnText: { fontWeight: "800" },
+  btnPrimary: { backgroundColor: "#0f172a", borderColor: "#0f172a" },
+  btnPrimaryText: { color: "white" },
+
+  btnSm: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    backgroundColor: "white",
+  },
+  btnGhost: {},
+
+  card: {
+    backgroundColor: "white",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    padding: 12,
+  },
+  title: { fontWeight: "700", color: "#0f172a", flex: 1, paddingRight: 8 },
+  price: { fontWeight: "800", color: "#0f172a" },
+  muted: { color: "#475569" },
+  mutedSmall: { color: "#64748b", fontSize: 12 },
+
+  center: { flex: 1, alignItems: "center", justifyContent: "center" },
 });

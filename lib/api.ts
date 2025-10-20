@@ -1,5 +1,8 @@
 // lib/api.ts
-export const BASE = "http://192.168.0.151:8787"; // ← your PC IP on Wi-Fi
+// Base URL for the API. Prefer an environment-provided value (Expo/React Native
+// exposes vars that start with EXPO_PUBLIC_ to the app), otherwise fall back
+// to the local development IP.
+export const BASE = (process.env.EXPO_PUBLIC_API_BASE as string) || "http://192.168.0.150:8787";
 
 export async function fetchCheapFlights({
   origin,
@@ -63,4 +66,18 @@ export async function fetchHotels({
   const r = await fetch(url);
   if (!r.ok) throw new Error(`Hotels fetch failed (${r.status})`);
   return (await r.json()) as any[]; // HotelQuote[]
+}
+
+// --- Compatibility exports for the app's expected API surface ---
+export type FlightQuote = any;
+export type HotelQuote = any;
+
+export async function getFlights(opts: any) {
+  const res = await fetchCheapFlights(opts);
+  return res;
+}
+
+export async function getHotels(opts: any) {
+  const res = await fetchHotels(opts);
+  return res;
 }

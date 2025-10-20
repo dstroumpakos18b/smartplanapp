@@ -1,16 +1,21 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "ESNext",
+  "module": "NodeNext",
     "jsx": "react-native",
     "allowJs": true,
     "strict": true,
     "noEmit": true,
-    "moduleResolution": "node",
+  "moduleResolution": "nodenext",
     "types": [
       "react",
-      "react-native"
-    ]
+      "react-native",
+      "node"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["*"]
+    }
   },
   "include": [
     "**/*"

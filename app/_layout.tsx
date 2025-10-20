@@ -1,14 +1,14 @@
-import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { Tabs } from "expo-router";
 
-export default function Layout() {
+export default function RootLayout() {
   return (
-    <Tabs screenOptions={{ headerShadowVisible: false }}>
+    <Tabs screenOptions={{ headerShown: false }}>
       <Tabs.Screen
         name="index"
         options={{
           title: "Home",
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Ionicons name="home-outline" color={color} size={size} />
           ),
         }}
@@ -17,7 +17,7 @@ export default function Layout() {
         name="explore"
         options={{
           title: "Explore",
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Ionicons name="search-outline" color={color} size={size} />
           ),
         }}
@@ -26,7 +26,7 @@ export default function Layout() {
         name="trips"
         options={{
           title: "My Trips",
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Ionicons name="airplane-outline" color={color} size={size} />
           ),
         }}
@@ -35,12 +35,14 @@ export default function Layout() {
         name="profile"
         options={{
           title: "Profile",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person-circle-outline" color={color} size={size} />
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
+            <Ionicons name="person-outline" color={color} size={size} />
           ),
         }}
       />
-      {/* Hide details route from the tab bar */}
+
+      {/* Hide detail pages from the tab bar */}
+      <Tabs.Screen name="trips/[id]" options={{ href: null }} />
       <Tabs.Screen name="package/[id]" options={{ href: null }} />
     </Tabs>
   );

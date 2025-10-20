@@ -1,7 +1,17 @@
 {
-  "plugins": [
-    "expo-font",
-    "expo-router",
-    "expo-web-browser"
-  ]
+  "expo": {
+    "name": "smartplanapp",
+    "slug": "travel-plann",
+    "version": "1.0.0",
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [],
+    "extra": {
+      "eas": {
+        "projectId": "58ed6083-fa59-45c7-8761-9e0e9e6258d9"
+      }
+    },
+    "owner": "dstroump"
+  }
 }
